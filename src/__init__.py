@@ -1,0 +1,1 @@
+"""Strato-DDNS package."""

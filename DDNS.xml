@@ -1,0 +1,11 @@
+<service>
+  <id>Strato-DDNS</id>
+  <name>Strato-DDNS</name>
+  <description>Aktualisiert eine Strato-Domain per Dynamic DNS.</description>
+  <executable>ddns.exe</executable>
+  <log mode="roll-by-size">
+    <sizeThreshold>2048</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+  <onfailure action="restart" delay="10 sec" />
+</service>

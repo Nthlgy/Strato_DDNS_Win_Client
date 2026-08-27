@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local tooling
+.vscode/
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+htmlcov/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Generated executables
+/*.exe
+
+# Local configuration and secrets
+/config.ini
+/config.local.ini
+
+# Runtime data
+logs/
+state/
+
+# Generated WinSW files and logs
+/WinSW.xml
+/WinSW.*.log
