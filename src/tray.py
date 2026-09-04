@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import ctypes
+import configparser
 import json
 import subprocess
 import sys
+import threading
+import tkinter as tk
+from tkinter import messagebox, ttk
 from ctypes import wintypes
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,10 +18,8 @@ user32 = ctypes.windll.user32
 shell32 = ctypes.windll.shell32
 
 WM_DESTROY = 0x0002
-WM_COMMAND = 0x0111
 WM_TIMER = 0x0113
 WM_LBUTTONUP = 0x0202
-WM_RBUTTONUP = 0x0205
 WM_APP = 0x8000
 TRAY_MESSAGE = WM_APP + 1
 NIM_ADD = 0x00000000
@@ -28,19 +30,10 @@ NOTIFYICON_VERSION_4 = 4
 NIF_MESSAGE = 0x00000001
 NIF_ICON = 0x00000002
 NIF_TIP = 0x00000004
-ID_STOP_SERVICE = 1001
-ID_START_SERVICE = 1002
-WS_POPUP = 0x80000000
-WS_CHILD = 0x40000000
-WS_VISIBLE = 0x10000000
-WS_BORDER = 0x00800000
-BS_PUSHBUTTON = 0x00000000
-WS_EX_TOOLWINDOW = 0x00000080
-WS_EX_TOPMOST = 0x00000008
 TIMER_ID = 1
 TIMER_INTERVAL_MS = 10_000
+GUI_REFRESH_MS = 2_000
 
-user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 user32.LoadImageW.argtypes = [
     wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
     ctypes.c_int, ctypes.c_int, wintypes.UINT
@@ -132,7 +125,7 @@ def create_status_icon(healthy: bool, running: bool) -> wintypes.HANDLE:
 
 
 class TrayApplication:
-    """Own the hidden window, icon, timer and context menu."""
+    """Own the hidden window, icon and timer."""
 
     def __init__(self) -> None:
         self.status_file = application_directory() / "state" / "status.json"
@@ -142,7 +135,7 @@ class TrayApplication:
         self.running: bool | None = None
         self.tooltip = "Strato-DDNS: Loading service status..."
         self.window: wintypes.HWND | None = None
-        self.menu_window: wintypes.HWND | None = None
+        self.config_window_open = False
         self.window_procedure = ctypes.WINFUNCTYPE(
             ctypes.c_long,
             wintypes.HWND,
@@ -194,14 +187,22 @@ class TrayApplication:
         shell32.Shell_NotifyIconW(action, ctypes.byref(self._notification_data()))
 
     def show_status(self) -> None:
-        """Display the full current tooltip on a left click."""
-        user32.MessageBoxW(self.window, self.tooltip, "Strato-DDNS", 0x40)
+        """Open the configuration and service status window on a left click."""
+        if self.config_window_open:
+            return
+        self.config_window_open = True
+        threading.Thread(target=self._run_config_window, daemon=True).start()
+
+    def _run_config_window(self) -> None:
+        try:
+            ConfigWindow(self).run()
+        finally:
+            self.config_window_open = False
 
     def start_service(self) -> None:
         """Ask WinSW to start the installed DDNS service."""
-        service_launcher = application_directory() / "WinSW.exe"
         try:
-                result = subprocess.run(
+            result = subprocess.run(
                 ["sc.exe", "start", "Strato-DDNS"],
                 cwd=application_directory(),
                 check=False,
@@ -227,7 +228,6 @@ class TrayApplication:
 
     def stop_service(self) -> None:
         """Ask WinSW to stop the installed DDNS service."""
-        service_launcher = application_directory() / "WinSW.exe"
         try:
             result = subprocess.run(
                 ["sc.exe", "stop", "Strato-DDNS"],
@@ -252,47 +252,6 @@ class TrayApplication:
             )
         self.refresh()
 
-    def show_menu(self) -> None:
-        """Show a small native popup with visible service-control buttons."""
-        point = wintypes.POINT()
-        user32.GetCursorPos(ctypes.byref(point))
-        if self.menu_window:
-            user32.DestroyWindow(self.menu_window)
-        self.menu_window = user32.CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-            self.class_name,
-            "Strato-DDNS",
-            WS_POPUP | WS_BORDER,
-            point.x - 170,
-            point.y - 58,
-            170,
-            58,
-            self.window,
-            None,
-            ctypes.windll.kernel32.GetModuleHandleW(None),
-            None,
-        )
-        for command_id, label, top in (
-            (ID_START_SERVICE, "Dienst starten", 4),
-            (ID_STOP_SERVICE, "Dienst beenden", 30),
-        ):
-            user32.CreateWindowExW(
-                0,
-                "BUTTON",
-                label,
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                4,
-                top,
-                162,
-                23,
-                self.menu_window,
-                command_id,
-                ctypes.windll.kernel32.GetModuleHandleW(None),
-                None,
-            )
-        user32.ShowWindow(self.menu_window, 1)
-        user32.SetForegroundWindow(self.menu_window)
-
     def _window_procedure(
         self, window: wintypes.HWND, message: int, wparam: int, lparam: int
     ) -> int:
@@ -303,22 +262,8 @@ class TrayApplication:
         if message == TRAY_MESSAGE:
             if lparam == WM_LBUTTONUP:
                 self.show_status()
-            elif lparam == WM_RBUTTONUP:
-                self.show_menu()
-            return 0
-        if message == WM_COMMAND and window == self.menu_window:
-            command_id = wparam & 0xFFFF
-            user32.DestroyWindow(self.menu_window)
-            self.menu_window = None
-            if command_id == ID_START_SERVICE:
-                self.start_service()
-            elif command_id == ID_STOP_SERVICE:
-                self.stop_service()
             return 0
         if message == WM_DESTROY:
-            if window == self.menu_window:
-                self.menu_window = None
-                return 0
             shell32.Shell_NotifyIconW(
                 NIM_DELETE,
                 ctypes.byref(self._notification_data()),
@@ -347,6 +292,177 @@ class TrayApplication:
         while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
             user32.TranslateMessage(ctypes.byref(message))
             user32.DispatchMessageW(ctypes.byref(message))
+
+
+class ConfigWindow:
+    """Tkinter editor for config.ini and the current service state."""
+
+    def __init__(self, tray: TrayApplication) -> None:
+        self.tray = tray
+        self.config_path = application_directory() / "config.ini"
+        self.parser = configparser.ConfigParser(interpolation=None)
+        self.variables: dict[tuple[str, str], tk.Variable] = {}
+        self.root = tk.Tk()
+        self.root.iconbitmap(str(asset_directory() / "ddns-neutral.ico"))
+
+    def _read_config(self) -> None:
+        if self.config_path.is_file():
+            self.parser.read(self.config_path, encoding="utf-8")
+        for section in ("ddns", "mail", "logging"):
+            if not self.parser.has_section(section):
+                self.parser.add_section(section)
+
+    def _value(self, section: str, option: str) -> str:
+        return self.parser.get(section, option, fallback="")
+
+    def _entry(
+        self,
+        parent: ttk.Frame,
+        row: int,
+        section: str,
+        option: str,
+        label: str,
+        password: bool = False,
+    ) -> None:
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=3)
+        variable = tk.StringVar(value=self._value(section, option))
+        self.variables[(section, option)] = variable
+        ttk.Entry(parent, textvariable=variable, show="*" if password else "").grid(
+            row=row, column=1, sticky="ew", pady=3
+        )
+
+    def _paired_entries(
+        self,
+        parent: ttk.Frame,
+        row: int,
+        fields: tuple[tuple[str, str, bool], tuple[str, str, bool]],
+    ) -> None:
+        for column, (option, label, password) in enumerate(fields):
+            label_column = column * 2
+            ttk.Label(parent, text=label).grid(
+                row=row, column=label_column, sticky="w", padx=(0, 8), pady=3
+            )
+            variable = tk.StringVar(value=self._value("ddns", option))
+            self.variables[("ddns", option)] = variable
+            ttk.Entry(parent, textvariable=variable, show="*" if password else "").grid(
+                row=row, column=label_column + 1, sticky="ew", padx=(0, 14), pady=3
+            )
+
+    def _checkbutton(
+        self, parent: ttk.Frame, row: int, section: str, option: str, label: str
+    ) -> None:
+        variable = tk.BooleanVar(value=self.parser.getboolean(section, option, fallback=False))
+        self.variables[(section, option)] = variable
+        ttk.Checkbutton(parent, text=label, variable=variable).grid(
+            row=row, column=1, sticky="w", pady=3
+        )
+
+    def _section(self, title: str) -> ttk.LabelFrame:
+        frame = ttk.LabelFrame(self.root, text=title, padding=10)
+        frame.pack(fill="x", padx=14, pady=(10, 0))
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
+        return frame
+
+    def _mail_pair(
+        self,
+        parent: ttk.Frame,
+        row: int,
+        fields: tuple[tuple[str, str, bool], tuple[str, str, bool]],
+    ) -> None:
+        for column, (option, label, password) in enumerate(fields):
+            label_column = column * 2
+            ttk.Label(parent, text=label).grid(
+                row=row, column=label_column, sticky="w", padx=(0, 8), pady=3
+            )
+            variable = tk.StringVar(value=self._value("mail", option))
+            self.variables[("mail", option)] = variable
+            ttk.Entry(parent, textvariable=variable, show="*" if password else "").grid(
+                row=row, column=label_column + 1, sticky="ew", padx=(0, 14), pady=3
+            )
+
+    def _save(self) -> None:
+        for (section, option), variable in self.variables.items():
+            self.parser.set(section, option, str(variable.get()).lower() if isinstance(variable, tk.BooleanVar) else str(variable.get()).strip())
+        try:
+            with self.config_path.open("w", encoding="utf-8") as config_file:
+                self.parser.write(config_file)
+        except OSError as error:
+            messagebox.showerror("Strato-DDNS", f"Die Konfiguration konnte nicht gespeichert werden:\n{error}", parent=self.root)
+            return
+        messagebox.showinfo("Strato-DDNS", "Konfiguration gespeichert.", parent=self.root)
+
+    def _update_status(self) -> None:
+        healthy, message = read_service_status(self.tray.status_file)
+        running = self.tray.service_is_running()
+        if not running:
+            text, color = "Gestoppt", "#777777"
+        elif healthy:
+            text, color = "Läuft · erfolgreich", "#198754"
+        else:
+            text, color = "Läuft · Fehler", "#dc3545"
+        self.status_light.configure(background=color)
+        self.status_label.configure(text=text, foreground=color)
+        self.details_label.configure(text=message.replace("Strato-DDNS: ", "", 1))
+        self.start_button.configure(state="disabled" if running else "normal")
+        self.stop_button.configure(state="normal" if running else "disabled")
+        if self.root.winfo_exists():
+            self.root.after(GUI_REFRESH_MS, self._update_status)
+
+    def _start(self) -> None:
+        self.tray.start_service()
+        self.root.after(500, self._update_status)
+
+    def _stop(self) -> None:
+        self.tray.stop_service()
+        self.root.after(500, self._update_status)
+
+    def run(self) -> None:
+        self._read_config()
+        self.root.title("Strato-DDNS")
+        self.root.geometry("560x700")
+        self.root.minsize(480, 580)
+        self.root.columnconfigure(0, weight=1)
+
+        status_frame = ttk.LabelFrame(self.root, text="Dienststatus", padding=10)
+        status_frame.pack(fill="x", padx=14, pady=10)
+        status_frame.columnconfigure(2, weight=1)
+        self.status_light = tk.Label(status_frame, width=2, height=1, background="#777777")
+        self.status_light.grid(row=0, column=0, padx=(0, 8))
+        self.status_label = ttk.Label(status_frame, text="Wird geprüft...")
+        self.status_label.grid(row=0, column=1, sticky="w")
+        self.details_label = ttk.Label(status_frame, text="")
+        self.details_label.grid(row=0, column=2, sticky="ew", padx=(14, 0))
+        button_frame = ttk.Frame(status_frame)
+        button_frame.grid(row=1, column=0, columnspan=3, sticky="e", pady=(10, 0))
+        self.start_button = ttk.Button(button_frame, text="Starten", command=self._start)
+        self.start_button.pack(side="left", padx=(0, 6))
+        self.stop_button = ttk.Button(button_frame, text="Stoppen", command=self._stop)
+        self.stop_button.pack(side="left")
+
+        ddns = self._section("DDNS")
+        self._entry(ddns, 0, "ddns", "hostname", "Hostname")
+        self._entry(ddns, 1, "ddns", "hostname_2", "Hostname 2")
+        self._entry(ddns, 2, "ddns", "hostname_3", "Hostname 3")
+        self._paired_entries(
+            ddns, 3, (("username", "Benutzername", False), ("password", "Passwort", True))
+        )
+        self._entry(ddns, 4, "ddns", "interval_seconds", "Intervall (sec)")
+        self._checkbutton(ddns, 5, "ddns", "update_ipv6", "IPv6 aktualisieren")
+
+        mail = self._section("E-Mail")
+        self._checkbutton(mail, 0, "mail", "enabled", "E-Mail-Benachrichtigungen aktiv")
+        self._mail_pair(mail, 1, (("host", "SMTP-Host", False), ("port", "Port", False)))
+        self._mail_pair(mail, 2, (("username", "Benutzername", False), ("password", "Passwort", True)))
+        self._entry(mail, 3, "mail", "sender", "Absender")
+        self._entry(mail, 4, "mail", "recipient", "Empfänger")
+        self._checkbutton(mail, 5, "mail", "starttls", "STARTTLS verwenden")
+        self._checkbutton(mail, 6, "mail", "recovery_mail", "Wiederherstellungs-Mail senden")
+
+        ttk.Button(self.root, text="Speichern", command=self._save).pack(anchor="e", padx=14, pady=10)
+        self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
+        self._update_status()
+        self.root.mainloop()
 
 
 if __name__ == "__main__":

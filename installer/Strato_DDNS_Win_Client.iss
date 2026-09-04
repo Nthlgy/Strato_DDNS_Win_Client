@@ -1,6 +1,6 @@
 #define MyAppName "Strato DDNS Windows Client"
 #define MyAppVersion "1.0.0"
-#define MyAppPublisher "Strato DDNS"
+#define MyAppPublisher "none"
 #define MyAppExeName "ddns.exe"
 
 [Setup]

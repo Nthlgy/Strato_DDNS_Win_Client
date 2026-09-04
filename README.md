@@ -37,7 +37,10 @@ die Konfiguration vor dem ersten Lauf angepasst werden kann. Das Tray-Symbol
 wird für den aktuellen Benutzer in den Autostart aufgenommen und direkt
 gestartet.
 
-Die rechte Maustaste auf dem Tray-Symbol bietet die Einträge `Dienst starten`
+Die linke Maustaste auf dem Tray-Symbol öffnet eine GUI zum Bearbeiten und
+Speichern der `config.ini`. Dort lassen sich der Dienst starten und beenden
+sowie sein Zustand und die letzte Synchronisationsmeldung ablesen. Die rechte
+Maustaste auf dem Tray-Symbol bietet zusätzlich die Einträge `Dienst starten`
 und `Dienst beenden`. Das Tray-Symbol bleibt dabei immer aktiv; bei einem
 inaktiven Dienst wird ein neutrales Symbol angezeigt.
 Die Deinstallation in den Windows-Einstellungen stoppt und entfernt den
